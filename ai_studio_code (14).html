@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Facebook Karaoke (With Music & Voice)</title>
+    <!-- Load WebAudioRecorder for MP3 encoding -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/WebAudioRecorder.js/0.1.1/WebAudioRecorder.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #f0f2f5;
+            color: #1c1e21;
+            text-align: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { color: #1877f2; }
+        
+        .input-group { margin: 20px 0; }
+        input[type="text"] {
+            width: 70%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+        }
+        .btn-load { background: #1877f2; }
+        .btn-rec { background: #e41e3f; }
+        .btn-stop { background: #333; }
+        
+        #video-container {
+            margin: 20px auto;
+            background: #000;
+            min-height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .step-instruction {
+            background: #fff3cd;
+            color: #856404;
+            padding: 10px;
+            border: 1px solid #ffeeba;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-size: 0.9em;
+            display: none;
+        }
+
+        #status { font-weight: bold; margin: 10px 0; }
+        #download-link { display: block; margin-top: 15px; font-size: 18px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Facebook Karaoke Recorder</h1>
+    <p>Records Music + Voice into MP3</p>
+
+    <div class="input-group">
+        <input type="text" id="fb-url" placeholder="Paste Facebook Video URL here..." value="https://www.facebook.com/facebook/videos/10153231379946729/">
+        <button class="btn-load" onclick="loadVideo()">1. Load Video</button>
+    </div>
+
+    <div id="video-container">
+        <p style="color:white">Video will appear here...</p>
+    </div>
+
+    <div class="controls">
+        <div id="guide" class="step-instruction">
+            <strong>IMPORTANT:</strong> When you click Record, a popup will ask to share your screen.<br>
+            1. Select <strong>"Chrome Tab"</strong> (this tab).<br>
+            2. Make sure <strong>"Share Tab Audio"</strong> is CHECKED.<br>
+            3. Then allow Microphone access.
+        </div>
+        <button id="btn-rec" class="btn-rec" onclick="startRecording()" disabled>2. Prepare Recording</button>
+        <button id="btn-stop" class="btn-stop" onclick="stopRecording()" disabled>3. Stop & Save</button>
+    </div>
+
+    <p id="status">Waiting...</p>
+    <div id="result-area"></div>
+</div>
+
+<div id="fb-root"></div>
+<script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js#xfbml=1&version=v18.0"></script>
+
+<script>
+    let audioContext;
+    let mixedStreamDestination;
+    let recorder;
+    let globalStream; // To stop tracks later
+
+    // --- 1. Load Facebook Video ---
+    function loadVideo() {
+        const url = document.getElementById('fb-url').value;
+        const container = document.getElementById('video-container');
+        
+        // Use Facebook's Embedded Video Player Plugin code
+        container.innerHTML = `
+            <div class="fb-video" 
+                data-href="${url}" 
+                data-width="500" 
+                data-show-text="false">
+            </div>`;
+        
+        // Re-parse XFBML to render the new video
+        if (window.FB) {
+            FB.XFBML.parse();
+        }
+
+        document.getElementById('btn-rec').disabled = false;
+        document.getElementById('guide').style.display = 'block';
+        document.getElementById('status').innerText = "Video Loaded. Ready to Record.";
+    }
+
+    // --- 2. Start Recording (Mixing Audio) ---
+    async function startRecording() {
+        try {
+            document.getElementById('status').innerText = "Please select 'Share Tab Audio' in the popup...";
+
+            // A. Capture System Audio (The Facebook Video Sound)
+            // Note: This asks the user to select the tab.
+            const screenStream = await navigator.mediaDevices.getDisplayMedia({
+                video: true, // Required to get audio in most browsers
+                audio: true,  // THIS IS KEY
+                selfBrowserSurface: 'include'
+            });
+
+            // B. Capture Microphone
+            const micStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: true,
+                video: false 
+            });
+
+            // C. Mix Them using Web Audio API
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            
+            const systemSource = audioContext.createMediaStreamSource(screenStream);
+            const micSource = audioContext.createMediaStreamSource(micStream);
+            const destination = audioContext.createMediaStreamDestination();
+
+            // Connect sources to destination
+            // Gain nodes can be added here to adjust volume balance if needed
+            systemSource.connect(destination);
+            micSource.connect(destination);
+
+            // D. Initialize MP3 Recorder
+            // WebAudioRecorder.js works with AudioContext nodes
+            recorder = new WebAudioRecorder(destination.stream, {
+                workerDir: "https://cdnjs.cloudflare.com/ajax/libs/WebAudioRecorder.js/0.1.1/", // Library path
+                encoding: "mp3",
+                numChannels: 2, 
+            });
+
+            recorder.onComplete = function(recorder, blob) {
+                createDownloadLink(blob);
+            };
+
+            recorder.setOptions({
+                timeLimit: 1200, // 20 mins max
+                encodeAfterRecord: true, // Encode after recording to prevent lag
+                mp3: { bitRate: 160 }
+            });
+
+            // E. Start Everything
+            recorder.startRecording();
+            
+            // Store streams to stop them later
+            globalStream = [screenStream, micStream];
+
+            // Update UI
+            document.getElementById('status').innerText = "🔴 Recording! Play the video now and Sing!";
+            document.getElementById('status').style.color = "red";
+            document.getElementById('btn-rec').disabled = true;
+            document.getElementById('btn-stop').disabled = false;
+
+        } catch (err) {
+            console.error(err);
+            alert("Error: " + err.message + ". \nDid you forget to check 'Share Tab Audio'?");
+        }
+    }
+
+    // --- 3. Stop Recording ---
+    function stopRecording() {
+        if (recorder) {
+            recorder.finishRecording(); // This triggers onComplete
+            
+            // Stop all audio tracks (release mic and screen)
+            globalStream.forEach(stream => {
+                stream.getTracks().forEach(track => track.stop());
+            });
+
+            document.getElementById('status').innerText = "Processing MP3... please wait.";
+            document.getElementById('status').style.color = "#333";
+            document.getElementById('btn-stop').disabled = true;
+            document.getElementById('btn-rec').disabled = false;
+        }
+    }
+
+    function createDownloadLink(blob) {
+        const url = URL.createObjectURL(blob);
+        const resultArea = document.getElementById('result-area');
+        
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.src = url;
+
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'facebook-karaoke.mp3';
+        link.innerHTML = '⬇ Download MP3';
+        link.id = 'download-link';
+        link.style.color = 'green';
+        link.style.fontWeight = 'bold';
+
+        resultArea.innerHTML = '';
+        resultArea.appendChild(audio);
+        resultArea.appendChild(link);
+        
+        document.getElementById('status').innerText = "✅ Done!";
+    }
+</script>
+
+</body>
+</html>
